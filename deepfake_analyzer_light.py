@@ -1,10 +1,11 @@
 """
 Lightweight Image Deepfake Detection using Hugging Face Inference API
-Model: prithivMLmods/deepfake-detector-model-v1
+Model: dima806/deepfake_vs_real_image_detection
 """
 
 from PIL import Image
-from huggingface_hub import InferenceClient
+import requests
+import base64
 import io
 import logging
 from typing import Dict, Any
@@ -17,23 +18,16 @@ logger = logging.getLogger(__name__)
 
 class DeepfakeDetector:
     def __init__(self):
-        # Use models that actually work on HF
-        self.primary_models = [
-            "Organika/sdxl-detector",  # Detects SDXL AI images
-            "umm-maybe/AI-image-detector",  # General AI detector
-        ]
+        # Use the most popular deepfake detection model with 24k+ downloads
+        self.primary_model = "dima806/deepfake_vs_real_image_detection"
+        # API endpoint for the model
+        self.api_url = f"https://api-inference.huggingface.co/models/{self.primary_model}"
         # Use Hugging Face token from environment
-        hf_token = os.getenv("HF_API_TOKEN")
-        if not hf_token:
+        self.hf_token = os.getenv("HF_API_TOKEN")
+        if not self.hf_token:
             logger.warning("HF_API_TOKEN not found, using fallback mode")
-            self.client = None
         else:
-            try:
-                self.client = InferenceClient(token=hf_token)
-                logger.info("DeepfakeDetector initialized with HF client")
-            except Exception as e:
-                logger.warning(f"Failed to initialize HF client: {e}")
-                self.client = None
+            logger.info(f"DeepfakeDetector initialized with model: {self.primary_model}")
         
     def analyze_image(self, image_bytes: bytes) -> Dict[str, Any]:
         """
@@ -46,12 +40,12 @@ class DeepfakeDetector:
             Dictionary containing analysis results
         """
         try:
-            # If no client, return mock data immediately
-            if not self.client:
+            # If no token, return mock data immediately
+            if not self.hf_token:
                 logger.info("Using fallback deepfake detection (HF_API_TOKEN not configured)")
                 return self._get_mock_response()
             
-            # Validate image
+            # Validate and prepare image
             try:
                 image = Image.open(io.BytesIO(image_bytes))
                 # Convert RGBA to RGB if necessary
@@ -70,13 +64,159 @@ class DeepfakeDetector:
                 logger.error(f"Invalid image data: {e}")
                 return self._get_mock_response()
             
-            # For now, always use fallback since the models aren't working properly
-            # This ensures consistent behavior
-            logger.info("Using fallback detection (models temporarily unavailable)")
-            return self._get_mock_response()
+            # Try the dima806 model using direct API call with binary data
+            try:
+                logger.info(f"Calling model API: {self.primary_model}")
+                
+                # Prepare headers with authorization
+                headers = {
+                    "Authorization": f"Bearer {self.hf_token}"
+                }
+                
+                # Send POST request with binary image data
+                response = requests.post(
+                    self.api_url,
+                    headers=headers,
+                    data=img_byte_arr,  # Send binary data directly
+                    timeout=30
+                )
+                
+                # Check response status
+                if response.status_code == 200:
+                    results = response.json()
+                    logger.info(f"Success with {self.primary_model}: {results}")
+                    return self._process_v1_results(results)
+                else:
+                    logger.warning(f"API request failed with status {response.status_code}: {response.text}")
+                    logger.info("Using fallback detection")
+                    return self._get_mock_response()
+                    
+            except requests.exceptions.Timeout:
+                logger.warning(f"API request timed out for {self.primary_model}")
+                return self._get_mock_response()
+            except Exception as e:
+                logger.warning(f"Model {self.primary_model} failed: {e}")
+                logger.info("Using fallback detection")
+                return self._get_mock_response()
             
         except Exception as e:
             logger.error(f"Error analyzing image: {e}")
+            return self._get_mock_response()
+    
+    def _process_v1_results(self, results: list) -> Dict[str, Any]:
+        """Process deepfake-detector-model-v1 results (fake vs real)"""
+        try:
+            response = {
+                "is_deepfake": False,
+                "confidence": 0.0,
+                "label": "unknown",
+                "risk_score": 0.0,
+                "risk_level": "low",
+                "details": {
+                    "all_predictions": results[:5] if results else [],
+                    "model": self.primary_model
+                }
+            }
+            
+            if not results:
+                return response
+            
+            # Process v1 model output (labels are "fake" or "real")
+            for result in results:
+                label = result.get("label", "").lower()
+                score = result.get("score", 0.0)
+                
+                if label == "fake":
+                    response["is_deepfake"] = True
+                    response["confidence"] = score
+                    response["label"] = "deepfake"
+                    # Apply conservative threshold
+                    if score < 0.75:
+                        response["is_deepfake"] = False
+                        response["label"] = "uncertain"
+                        response["risk_level"] = "low"
+                        response["risk_score"] = 0.3
+                    elif score > 0.85:
+                        response["risk_level"] = "high"
+                        response["risk_score"] = 0.9
+                    else:
+                        response["risk_level"] = "medium"
+                        response["risk_score"] = 0.7
+                    break
+                elif label == "real":
+                    response["is_deepfake"] = False
+                    response["confidence"] = score
+                    response["label"] = "authentic"
+                    response["risk_level"] = "low"
+                    response["risk_score"] = 0.1
+                    break
+            
+            # Add explanations
+            response["explanations"] = self._generate_explanations(response)
+            response["recommendations"] = self._generate_recommendations(response)
+            
+            return response
+            
+        except Exception as e:
+            logger.error(f"Error processing v1 results: {e}")
+            return self._get_mock_response()
+    
+    def _process_v2_results(self, results: list) -> Dict[str, Any]:
+        """Process Deep-Fake-Detector-v2-Model results (Realism vs Deepfake)"""
+        try:
+            response = {
+                "is_deepfake": False,
+                "confidence": 0.0,
+                "label": "unknown",
+                "risk_score": 0.0,
+                "risk_level": "low",
+                "details": {
+                    "all_predictions": results[:5] if results else [],
+                    "model": "Deep-Fake-Detector-v2-Model"
+                }
+            }
+            
+            if not results:
+                return response
+            
+            # Process v2 model output (labels are "Realism" or "Deepfake")
+            for result in results:
+                label = result.get("label", "")
+                score = result.get("score", 0.0)
+                
+                if label == "Deepfake":
+                    response["is_deepfake"] = True
+                    response["confidence"] = score
+                    response["label"] = "deepfake"
+                    # Apply conservative threshold
+                    if score < 0.75:
+                        response["is_deepfake"] = False
+                        response["label"] = "uncertain"
+                        response["risk_level"] = "low"
+                        response["risk_score"] = 0.3
+                    elif score > 0.85:
+                        response["risk_level"] = "high"
+                        response["risk_score"] = 0.9
+                    else:
+                        response["risk_level"] = "medium"
+                        response["risk_score"] = 0.7
+                    break
+                elif label == "Realism":
+                    response["is_deepfake"] = False
+                    response["confidence"] = score
+                    response["label"] = "authentic"
+                    response["risk_level"] = "low"
+                    response["risk_score"] = 0.1
+                    break
+            
+            # Add explanations
+            response["explanations"] = self._generate_explanations(response)
+            response["recommendations"] = self._generate_recommendations(response)
+            
+            return response
+            
+        except Exception as e:
+            logger.error(f"Error processing v2 results: {e}")
             return self._get_mock_response()
     
     def _process_results(self, results: list) -> Dict[str, Any]:
