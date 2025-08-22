@@ -21,7 +21,6 @@ class DeepfakeDetector:
         self.primary_models = [
             "Organika/sdxl-detector",  # Detects SDXL AI images
             "umm-maybe/AI-image-detector",  # General AI detector
-            "Bazarov/ai-image-detector",  # Another AI detector
         ]
         # Use Hugging Face token from environment
         hf_token = os.getenv("HF_API_TOKEN")
@@ -29,8 +28,12 @@ class DeepfakeDetector:
             logger.warning("HF_API_TOKEN not found, using fallback mode")
             self.client = None
         else:
-            self.client = InferenceClient(token=hf_token)
-        logger.info(f"DeepfakeDetector initialized with working models")
+            try:
+                self.client = InferenceClient(token=hf_token)
+                logger.info("DeepfakeDetector initialized with HF client")
+            except Exception as e:
+                logger.warning(f"Failed to initialize HF client: {e}")
+                self.client = None
         
     def analyze_image(self, image_bytes: bytes) -> Dict[str, Any]:
         """
@@ -45,7 +48,7 @@ class DeepfakeDetector:
         try:
             # If no client, return mock data
             if not self.client:
-                logger.warning("Using mock deepfake detection response")
+                logger.info("Using fallback deepfake detection (HF_API_TOKEN not configured)")
                 return self._get_mock_response()
             
             # Open and prepare image
